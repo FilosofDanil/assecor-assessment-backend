@@ -1,21 +1,30 @@
 package csv
 
 import (
+	"bytes"
 	"context"
 	stdcsv "encoding/csv"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/gocarina/gocsv"
 	"go.uber.org/zap"
 
 	"assecor-assessment-backend/internal/domain"
 )
 
-// PersonRepository implementiert repository. PersonRepository und hält alle Personen im Arbeitsspeicher.
+// personDTO ist das Zwischen-DTO, das gocsv aus der normalisierten CSV befüllt.
+type personDTO struct {
+	Lastname string `csv:"lastname"`
+	Name     string `csv:"name"`
+	ZipCity  string `csv:"zipcity"`
+	ColorID  string `csv:"colorid"`
+}
+
+// PersonRepository hält alle Personen im Arbeitsspeicher und implementiert repository.PersonRepository.
 type PersonRepository struct {
 	mu      sync.RWMutex
 	persons []domain.Person
@@ -23,7 +32,7 @@ type PersonRepository struct {
 	logger  *zap.Logger
 }
 
-// NewPersonRepository legt ein neues CSV-Repository an und lädt alle Datensätze aus filePath beim Aufruf sofort in den Speicher.
+// NewPersonRepository legt ein neues PersonRepository an und lädt alle Datensätze aus filePath sofort in den Speicher.
 func NewPersonRepository(filePath string, logger *zap.Logger) (*PersonRepository, error) {
 	r := &PersonRepository{logger: logger}
 	if err := r.load(filePath); err != nil {
@@ -32,64 +41,42 @@ func NewPersonRepository(filePath string, logger *zap.Logger) (*PersonRepository
 	return r, nil
 }
 
-// load liest die CSV-Datei und befüllt r.persons.
+// load liest die CSV-Datei, und befüllt r.persons über gocsv.
 func (r *PersonRepository) load(filePath string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	file, err := os.Open(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("datei öffnen %s: %w", filePath, err)
+		return fmt.Errorf("datei lesen %s: %w", filePath, err)
 	}
-	defer file.Close()
 
-	reader := stdcsv.NewReader(file)
-	reader.FieldsPerRecord = -1
-	reader.TrimLeadingSpace = true
+	normalized, err := normalizeCSV(data, r.logger)
+	if err != nil {
+		return fmt.Errorf("csv normalisieren: %w", err)
+	}
 
-	var (
-		accumulated []string
-		personIndex = 1
-	)
+	var dtos []*personDTO
+	if err := gocsv.UnmarshalBytes(normalized, &dtos); err != nil {
+		return fmt.Errorf("csv parsen: %w", err)
+	}
 
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
+	r.persons = make([]domain.Person, 0, len(dtos))
+	for i, dto := range dtos {
+		// i+1 als positionsstabile ID verwenden, damit ein fehlerhafter Datensatz
+		// die IDs aller nachfolgenden Einträge nicht verschiebt.
+		person, err := toPerson(i+1, dto)
 		if err != nil {
-			return fmt.Errorf("csv lesen: %w", err)
+			r.logger.Warn("ungültiger Datensatz wird übersprungen",
+				zap.Int("datensatz", i+1),
+				zap.Error(err),
+			)
+			continue
 		}
-
-		for _, field := range record {
-			if trimmed := strings.TrimSpace(field); trimmed != "" {
-				accumulated = append(accumulated, trimmed)
-			}
-		}
-
-		if len(accumulated) >= 4 {
-			person, err := parseRecord(personIndex, accumulated)
-			if err != nil {
-				r.logger.Warn("ungültiger Datensatz wird übersprungen",
-					zap.Int("datensatz", personIndex),
-					zap.Error(err),
-				)
-			} else {
-				r.persons = append(r.persons, person)
-				personIndex++
-			}
-			accumulated = nil
-		}
+		r.persons = append(r.persons, person)
 	}
 
-	if len(accumulated) > 0 {
-		r.logger.Warn("unvollständiger Datensatz am Dateiende",
-			zap.Strings("felder", accumulated),
-		)
-	}
-
-	// Nächste freie ID direkt nach dem letzten geladenen Datensatz setzen.
-	r.nextID = len(r.persons) + 1
+	r.nextID = len(dtos) + 1
 
 	r.logger.Info("personen aus CSV geladen",
 		zap.Int("anzahl", len(r.persons)),
@@ -98,40 +85,69 @@ func (r *PersonRepository) load(filePath string) error {
 	return nil
 }
 
-// parseRecord wandelt bereits getrimmte CSV-Felder in eine Person um.
-func parseRecord(id int, fields []string) (domain.Person, error) {
-	n := len(fields)
-	if n < 4 {
-		return domain.Person{}, fmt.Errorf("erwartet >= 4 Felder, erhalten %d", n)
+// normalizeCSV verarbeitet das mehrzeilige Datensatzformat der Quell-CSV.
+func normalizeCSV(data []byte, logger *zap.Logger) ([]byte, error) {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+
+	records := make([][]string, 0, len(lines)+1)
+	records = append(records, []string{"lastname", "name", "zipcity", "colorid"})
+
+	var accumulated []string
+	for _, line := range lines {
+		for _, field := range strings.Split(line, ",") {
+			if trimmed := strings.TrimSpace(field); trimmed != "" {
+				accumulated = append(accumulated, trimmed)
+			}
+		}
+
+		if len(accumulated) >= 4 {
+			n := len(accumulated)
+			records = append(records, []string{
+				accumulated[0],
+				accumulated[1],
+				strings.Join(accumulated[2:n-1], " "),
+				accumulated[n-1],
+			})
+			accumulated = nil
+		}
 	}
 
-	lastname := fields[0]
-	name := fields[1]
+	if len(accumulated) > 0 {
+		logger.Warn("unvollständiger Datensatz am Dateiende wird verworfen",
+			zap.Strings("felder", accumulated),
+		)
+	}
 
-	colorStr := fields[n-1]
-	colorID, err := strconv.Atoi(colorStr)
+	var buf bytes.Buffer
+	w := stdcsv.NewWriter(&buf)
+	if err := w.WriteAll(records); err != nil {
+		return nil, fmt.Errorf("csv schreiben: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// toPerson wandelt ein personDTO in eine domain.Person um.
+func toPerson(id int, dto *personDTO) (domain.Person, error) {
+	colorID, err := strconv.Atoi(strings.TrimSpace(dto.ColorID))
 	if err != nil {
-		return domain.Person{}, fmt.Errorf("ungültige Farb-ID %q: %w", colorStr, err)
+		return domain.Person{}, fmt.Errorf("ungültige Farb-ID %q: %w", dto.ColorID, err)
 	}
 	colorName, ok := domain.ColorMap[colorID]
 	if !ok {
 		return domain.Person{}, fmt.Errorf("unbekannte Farb-ID %d", colorID)
 	}
-
-	zipcodeCity := strings.Join(fields[2:n-1], " ")
-	zipcode, city := splitZipcodeCity(zipcodeCity)
-
+	zipcode, city := splitZipcodeCity(dto.ZipCity)
 	return domain.Person{
 		ID:       id,
-		Name:     name,
-		Lastname: lastname,
+		Name:     dto.Name,
+		Lastname: dto.Lastname,
 		Zipcode:  zipcode,
 		City:     city,
 		Color:    colorName,
 	}, nil
 }
 
-// splitZipcodeCity trennt eine Zeichenkette der Form "PLZ Stadt" am ersten Leerzeichen in Postleitzahl und Stadtname auf.
+// splitZipcodeCity trennt eine Zeichenkette der Form "PLZ Stadt" am ersten Leerzeichen
 func splitZipcodeCity(s string) (string, string) {
 	parts := strings.SplitN(s, " ", 2)
 	if len(parts) == 2 {
@@ -140,7 +156,7 @@ func splitZipcodeCity(s string) (string, string) {
 	return s, ""
 }
 
-// GetAll gibt alle Personen zurück.
+// GetAll gibt eine Momentaufnahme aller Personen zurück.
 func (r *PersonRepository) GetAll(_ context.Context) ([]domain.Person, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -177,7 +193,7 @@ func (r *PersonRepository) GetByColor(_ context.Context, color string) ([]domain
 	return out, nil
 }
 
-// Add fügt eine neue Person hinzu und vergibt eine eindeutige, monoton steigende ID über den nextID-Zähler.
+// Add fügt eine neue Person hinzu und vergibt eine eindeutige, monoton steigende ID.
 func (r *PersonRepository) Add(_ context.Context, person domain.Person) (domain.Person, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
