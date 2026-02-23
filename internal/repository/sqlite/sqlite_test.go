@@ -36,35 +36,9 @@ func seedRepo(t *testing.T, maxPersons int) *PersonRepository {
 
 func TestGetAll(t *testing.T) {
 	repo := seedRepo(t, 0)
-	all, err := repo.GetAll(context.Background(), 0, 0)
+	all, err := repo.GetAll(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, all, 3)
-}
-
-func TestGetAll_Paginierung(t *testing.T) {
-	repo := seedRepo(t, 0)
-
-	tests := []struct {
-		name    string
-		limit   int
-		offset  int
-		wantLen int
-	}{
-		{"alle ohne Limit", 0, 0, 3},
-		{"limit 2", 2, 0, 2},
-		{"offset 1", 0, 1, 2},
-		{"limit 1 offset 1", 1, 1, 1},
-		{"offset über Gesamtzahl", 0, 99, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			persons, err := repo.GetAll(context.Background(), tt.limit, tt.offset)
-			require.NoError(t, err)
-			assert.NotNil(t, persons)
-			assert.Len(t, persons, tt.wantLen)
-		})
-	}
 }
 
 func TestGetByID(t *testing.T) {
@@ -81,15 +55,15 @@ func TestGetByID(t *testing.T) {
 func TestGetByColor(t *testing.T) {
 	repo := seedRepo(t, 0)
 
-	blau, err := repo.GetByColor(context.Background(), "blau", 0, 0)
+	blau, err := repo.GetByColor(context.Background(), "blau")
 	require.NoError(t, err)
 	assert.Len(t, blau, 2)
 
-	gruen, err := repo.GetByColor(context.Background(), "grün", 0, 0)
+	gruen, err := repo.GetByColor(context.Background(), "grün")
 	require.NoError(t, err)
 	assert.Len(t, gruen, 1)
 
-	rot, err := repo.GetByColor(context.Background(), "rot", 0, 0)
+	rot, err := repo.GetByColor(context.Background(), "rot")
 	require.NoError(t, err)
 	assert.NotNil(t, rot)
 	assert.Empty(t, rot)

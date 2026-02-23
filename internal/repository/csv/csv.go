@@ -164,28 +164,14 @@ func splitZipcodeCity(s string) (string, string) {
 	return s, ""
 }
 
-// applyPagination wendet Offset/Limit auf einen Personen-Slice an.
-func applyPagination(items []domain.Person, limit, offset int) []domain.Person {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= len(items) {
-		return make([]domain.Person, 0)
-	}
-	items = items[offset:]
-	if limit > 0 && limit < len(items) {
-		items = items[:limit]
-	}
-	out := make([]domain.Person, len(items))
-	copy(out, items)
-	return out
-}
-
-// GetAll gibt alle Personen zurück, optional paginiert.
-func (r *PersonRepository) GetAll(_ context.Context, limit, offset int) ([]domain.Person, error) {
+// GetAll gibt alle Personen zurück.
+func (r *PersonRepository) GetAll(_ context.Context) ([]domain.Person, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return applyPagination(r.persons, limit, offset), nil
+
+	out := make([]domain.Person, len(r.persons))
+	copy(out, r.persons)
+	return out, nil
 }
 
 // GetByID sucht eine Person anhand ihrer positionsbasierten ID.
@@ -201,18 +187,18 @@ func (r *PersonRepository) GetByID(_ context.Context, id int) (domain.Person, er
 	return domain.Person{}, fmt.Errorf("person mit id %d: %w", id, domain.ErrNotFound)
 }
 
-// GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück, optional paginiert.
-func (r *PersonRepository) GetByColor(_ context.Context, color string, limit, offset int) ([]domain.Person, error) {
+// GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück.
+func (r *PersonRepository) GetByColor(_ context.Context, color string) ([]domain.Person, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var matched []domain.Person
+	out := make([]domain.Person, 0)
 	for _, p := range r.persons {
 		if p.Color == color {
-			matched = append(matched, p)
+			out = append(out, p)
 		}
 	}
-	return applyPagination(matched, limit, offset), nil
+	return out, nil
 }
 
 // Add fügt eine neue Person hinzu.

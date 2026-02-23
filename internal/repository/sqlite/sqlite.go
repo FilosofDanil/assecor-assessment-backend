@@ -18,7 +18,9 @@ type PersonRepository struct {
 	logger     *zap.Logger
 }
 
-// NewPersonRepository öffnet die SQLite-Datenbank und gibt ein einsatzbereites Repository zurück.
+// NewPersonRepository öffnet die SQLite-Datenbank unter dsn, erstellt das
+// Schema und gibt ein einsatzbereites Repository zurück.
+// maxPersons begrenzt die Zeilenanzahl; 0 bedeutet unbegrenzt.
 func NewPersonRepository(dsn string, maxPersons int, logger *zap.Logger) (*PersonRepository, error) {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -50,19 +52,10 @@ func (r *PersonRepository) Close() error {
 	return r.db.Close()
 }
 
-// GetAll gibt alle Personen zurück, optional paginiert.
-func (r *PersonRepository) GetAll(ctx context.Context, limit, offset int) ([]domain.Person, error) {
-	query := "SELECT id, name, lastname, zipcode, city, color FROM persons ORDER BY id"
-	args := make([]any, 0, 2)
-	if limit > 0 {
-		query += " LIMIT ? OFFSET ?"
-		args = append(args, limit, clampOffset(offset))
-	} else if offset > 0 {
-		// LIMIT -1 in SQLite = kein Limit, aber OFFSET wird angewendet.
-		query += " LIMIT -1 OFFSET ?"
-		args = append(args, clampOffset(offset))
-	}
-	return r.queryPersons(ctx, query, args...)
+// GetAll gibt alle Personen zurück.
+func (r *PersonRepository) GetAll(ctx context.Context) ([]domain.Person, error) {
+	return r.queryPersons(ctx,
+		"SELECT id, name, lastname, zipcode, city, color FROM persons ORDER BY id")
 }
 
 // GetByID sucht eine Person anhand ihrer ID.
@@ -81,17 +74,10 @@ func (r *PersonRepository) GetByID(ctx context.Context, id int) (domain.Person, 
 }
 
 // GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück.
-func (r *PersonRepository) GetByColor(ctx context.Context, color string, limit, offset int) ([]domain.Person, error) {
-	query := "SELECT id, name, lastname, zipcode, city, color FROM persons WHERE color = ? ORDER BY id"
-	args := []any{color}
-	if limit > 0 {
-		query += " LIMIT ? OFFSET ?"
-		args = append(args, limit, clampOffset(offset))
-	} else if offset > 0 {
-		query += " LIMIT -1 OFFSET ?"
-		args = append(args, clampOffset(offset))
-	}
-	return r.queryPersons(ctx, query, args...)
+func (r *PersonRepository) GetByColor(ctx context.Context, color string) ([]domain.Person, error) {
+	return r.queryPersons(ctx,
+		"SELECT id, name, lastname, zipcode, city, color FROM persons WHERE color = ? ORDER BY id",
+		color)
 }
 
 // Add fügt eine neue Person hinzu und prüft die Kapazitätsgrenze.
@@ -149,11 +135,4 @@ func (r *PersonRepository) queryPersons(ctx context.Context, query string, args 
 		out = append(out, p)
 	}
 	return out, rows.Err()
-}
-
-func clampOffset(offset int) int {
-	if offset < 0 {
-		return 0
-	}
-	return offset
 }
