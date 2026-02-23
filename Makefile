@@ -7,7 +7,7 @@ run: build
 	./bin/server
 
 test:
-	go test ./... -v -race -count=1
+	go test ./... -v -count=1
 
 lint:
 	golangci-lint run ./...

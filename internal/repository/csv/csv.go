@@ -26,22 +26,23 @@ type personDTO struct {
 
 // PersonRepository hält alle Personen im Arbeitsspeicher und implementiert repository.PersonRepository.
 type PersonRepository struct {
-	mu      sync.RWMutex
-	persons []domain.Person
-	nextID  int
-	logger  *zap.Logger
+	mu         sync.RWMutex
+	persons    []domain.Person
+	nextID     int
+	maxPersons int
+	logger     *zap.Logger
 }
 
-// NewPersonRepository legt ein neues PersonRepository an und lädt alle Datensätze aus filePath sofort in den Speicher.
-func NewPersonRepository(filePath string, logger *zap.Logger) (*PersonRepository, error) {
-	r := &PersonRepository{logger: logger}
+// NewPersonRepository legt ein neues PersonRepository
+func NewPersonRepository(filePath string, maxPersons int, logger *zap.Logger) (*PersonRepository, error) {
+	r := &PersonRepository{maxPersons: maxPersons, logger: logger}
 	if err := r.load(filePath); err != nil {
 		return nil, fmt.Errorf("csv-repository: %w", err)
 	}
 	return r, nil
 }
 
-// load liest die CSV-Datei, und befüllt r.persons über gocsv.
+// load liest die CSV-Datei und befüllt r.persons über gocsv.
 func (r *PersonRepository) load(filePath string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -63,14 +64,10 @@ func (r *PersonRepository) load(filePath string) error {
 
 	r.persons = make([]domain.Person, 0, len(dtos))
 	for i, dto := range dtos {
-		// i+1 als positionsstabile ID verwenden, damit ein fehlerhafter Datensatz
-		// die IDs aller nachfolgenden Einträge nicht verschiebt.
 		person, err := toPerson(i+1, dto)
 		if err != nil {
-			r.logger.Warn("ungültiger Datensatz wird übersprungen",
-				zap.Int("datensatz", i+1),
-				zap.Error(err),
-			)
+			r.logger.Warn("ungültiger datensatz wird übersprungen",
+				zap.Int("datensatz", i+1), zap.Error(err))
 			continue
 		}
 		r.persons = append(r.persons, person)
@@ -79,9 +76,7 @@ func (r *PersonRepository) load(filePath string) error {
 	r.nextID = len(dtos) + 1
 
 	r.logger.Info("personen aus CSV geladen",
-		zap.Int("anzahl", len(r.persons)),
-		zap.String("datei", filePath),
-	)
+		zap.Int("anzahl", len(r.persons)), zap.String("datei", filePath))
 	return nil
 }
 
@@ -94,7 +89,15 @@ func normalizeCSV(data []byte, logger *zap.Logger) ([]byte, error) {
 
 	var accumulated []string
 	for _, line := range lines {
-		for _, field := range strings.Split(line, ",") {
+		rawParts := strings.Split(line, ",")
+		nonEmpty := countNonEmpty(rawParts)
+		if len(accumulated) > 0 && nonEmpty >= 4 {
+			logger.Warn("fehlerhafter vorgänger-datensatz verworfen",
+				zap.Strings("felder", accumulated))
+			accumulated = nil
+		}
+
+		for _, field := range rawParts {
 			if trimmed := strings.TrimSpace(field); trimmed != "" {
 				accumulated = append(accumulated, trimmed)
 			}
@@ -113,9 +116,8 @@ func normalizeCSV(data []byte, logger *zap.Logger) ([]byte, error) {
 	}
 
 	if len(accumulated) > 0 {
-		logger.Warn("unvollständiger Datensatz am Dateiende wird verworfen",
-			zap.Strings("felder", accumulated),
-		)
+		logger.Warn("unvollständiger datensatz am dateiende wird verworfen",
+			zap.Strings("felder", accumulated))
 	}
 
 	var buf bytes.Buffer
@@ -130,24 +132,30 @@ func normalizeCSV(data []byte, logger *zap.Logger) ([]byte, error) {
 func toPerson(id int, dto *personDTO) (domain.Person, error) {
 	colorID, err := strconv.Atoi(strings.TrimSpace(dto.ColorID))
 	if err != nil {
-		return domain.Person{}, fmt.Errorf("ungültige Farb-ID %q: %w", dto.ColorID, err)
+		return domain.Person{}, fmt.Errorf("ungültige farb-id %q: %w", dto.ColorID, err)
 	}
 	colorName, ok := domain.ColorMap[colorID]
 	if !ok {
-		return domain.Person{}, fmt.Errorf("unbekannte Farb-ID %d", colorID)
+		return domain.Person{}, fmt.Errorf("unbekannte farb-id %d", colorID)
 	}
 	zipcode, city := splitZipcodeCity(dto.ZipCity)
 	return domain.Person{
-		ID:       id,
-		Name:     dto.Name,
-		Lastname: dto.Lastname,
-		Zipcode:  zipcode,
-		City:     city,
-		Color:    colorName,
+		ID: id, Name: dto.Name, Lastname: dto.Lastname,
+		Zipcode: zipcode, City: city, Color: colorName,
 	}, nil
 }
 
-// splitZipcodeCity trennt eine Zeichenkette der Form "PLZ Stadt" am ersten Leerzeichen
+func countNonEmpty(parts []string) int {
+	n := 0
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// splitZipcodeCity trennt "PLZ Stadt" am ersten Leerzeichen.
 func splitZipcodeCity(s string) (string, string) {
 	parts := strings.SplitN(s, " ", 2)
 	if len(parts) == 2 {
@@ -156,14 +164,28 @@ func splitZipcodeCity(s string) (string, string) {
 	return s, ""
 }
 
-// GetAll gibt eine Momentaufnahme aller Personen zurück.
-func (r *PersonRepository) GetAll(_ context.Context) ([]domain.Person, error) {
+// applyPagination wendet Offset/Limit auf einen Personen-Slice an.
+func applyPagination(items []domain.Person, limit, offset int) []domain.Person {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return make([]domain.Person, 0)
+	}
+	items = items[offset:]
+	if limit > 0 && limit < len(items) {
+		items = items[:limit]
+	}
+	out := make([]domain.Person, len(items))
+	copy(out, items)
+	return out
+}
+
+// GetAll gibt alle Personen zurück, optional paginiert.
+func (r *PersonRepository) GetAll(_ context.Context, limit, offset int) ([]domain.Person, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	out := make([]domain.Person, len(r.persons))
-	copy(out, r.persons)
-	return out, nil
+	return applyPagination(r.persons, limit, offset), nil
 }
 
 // GetByID sucht eine Person anhand ihrer positionsbasierten ID.
@@ -179,24 +201,28 @@ func (r *PersonRepository) GetByID(_ context.Context, id int) (domain.Person, er
 	return domain.Person{}, fmt.Errorf("person mit id %d: %w", id, domain.ErrNotFound)
 }
 
-// GetByColor gibt alle Personen zurück, deren Lieblingsfarbe mit color übereinstimmt.
-func (r *PersonRepository) GetByColor(_ context.Context, color string) ([]domain.Person, error) {
+// GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück, optional paginiert.
+func (r *PersonRepository) GetByColor(_ context.Context, color string, limit, offset int) ([]domain.Person, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	out := make([]domain.Person, 0)
+	var matched []domain.Person
 	for _, p := range r.persons {
 		if p.Color == color {
-			out = append(out, p)
+			matched = append(matched, p)
 		}
 	}
-	return out, nil
+	return applyPagination(matched, limit, offset), nil
 }
 
-// Add fügt eine neue Person hinzu und vergibt eine eindeutige, monoton steigende ID.
+// Add fügt eine neue Person hinzu.
 func (r *PersonRepository) Add(_ context.Context, person domain.Person) (domain.Person, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.maxPersons > 0 && len(r.persons) >= r.maxPersons {
+		return domain.Person{}, fmt.Errorf("max %d personen: %w", r.maxPersons, domain.ErrCapacityReached)
+	}
 
 	person.ID = r.nextID
 	r.nextID++

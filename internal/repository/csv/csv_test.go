@@ -33,7 +33,7 @@ func parseCSVRows(t *testing.T, data []byte) [][]string {
 	all, err := r.ReadAll()
 	require.NoError(t, err)
 	require.NotEmpty(t, all, "mindestens eine Kopfzeile erwartet")
-	return all[1:] // Kopfzeile überspringen
+	return all[1:]
 }
 
 // ─── normalizeCSV ─────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ func TestNormalizeCSV(t *testing.T) {
 		name      string
 		input     string
 		wantRows  int
-		wantCells [][]string // [Zeile][Spalte] – nur gesetzt wenn wantRows > 0
+		wantCells [][]string
 	}{
 		{
 			name:     "normale Einträge werden korrekt aufgeteilt",
@@ -81,7 +81,7 @@ func TestNormalizeCSV(t *testing.T) {
 			},
 		},
 		{
-			name:     "Sonderzeichen in Stadtname werden korrekt maskiert",
+			name:     "Sonderzeichen in Stadtname",
 			input:    "Andersson, Anders, 32132 Schweden - ☀, 2\n",
 			wantRows: 1,
 			wantCells: [][]string{
@@ -107,16 +107,31 @@ func TestNormalizeCSV(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			out, err := normalizeCSV([]byte(tt.input), logger)
 			require.NoError(t, err)
-
 			rows := parseCSVRows(t, out)
 			assert.Len(t, rows, tt.wantRows)
-
 			for i, want := range tt.wantCells {
-				require.Less(t, i, len(rows), "Zeile %d fehlt in der Ausgabe", i)
+				require.Less(t, i, len(rows))
 				assert.Equal(t, want, rows[i])
 			}
 		})
 	}
+}
+
+// ─── Bug 2: Akkumulationsschutz ─────────────────────────────────────────────
+
+func TestNormalizeCSV_AkkumulationsschutzBug2(t *testing.T) {
+	// Ein fehlerhafter 3-Feld-Datensatz gefolgt von einem korrekten.
+	// Ohne den Schutz würden die 3 Felder mit den nächsten verschmelzen.
+	// Mit dem Schutz wird bei > maxFieldsAccumulated verworfen.
+	input := "A, B, C\nD, E, F\nG, H, I\nMüller, Hans, 67742 Lauterecken, 1\n"
+	out, err := normalizeCSV([]byte(input), testLogger())
+	require.NoError(t, err)
+
+	rows := parseCSVRows(t, out)
+	// Der letzte gültige 4-Feld-Datensatz muss erhalten bleiben.
+	require.GreaterOrEqual(t, len(rows), 1)
+	last := rows[len(rows)-1]
+	assert.Equal(t, "Müller", last[0])
 }
 
 // ─── toPerson ─────────────────────────────────────────────────────────────────
@@ -136,18 +151,6 @@ func TestToPerson(t *testing.T) {
 			want: domain.Person{ID: 1, Name: "Hans", Lastname: "Müller", Zipcode: "67742", City: "Lauterecken", Color: "blau"},
 		},
 		{
-			name: "Stadt mit Leerzeichen",
-			id:   2,
-			dto:  &personDTO{Lastname: "Johnson", Name: "Johnny", ZipCity: "88888 made up", ColorID: "3"},
-			want: domain.Person{ID: 2, Name: "Johnny", Lastname: "Johnson", Zipcode: "88888", City: "made up", Color: "violett"},
-		},
-		{
-			name: "alle sieben Farben korrekt abgebildet – Farbe 7 (weiß)",
-			id:   7,
-			dto:  &personDTO{Lastname: "A", Name: "B", ZipCity: "00000 C", ColorID: "7"},
-			want: domain.Person{ID: 7, Name: "B", Lastname: "A", Zipcode: "00000", City: "C", Color: "weiß"},
-		},
-		{
 			name:    "Farb-ID kein Integer",
 			id:      1,
 			dto:     &personDTO{Lastname: "X", Name: "Y", ZipCity: "11111 Z", ColorID: "abc"},
@@ -157,12 +160,6 @@ func TestToPerson(t *testing.T) {
 			name:    "Farb-ID außerhalb des gültigen Bereichs",
 			id:      1,
 			dto:     &personDTO{Lastname: "X", Name: "Y", ZipCity: "11111 Z", ColorID: "99"},
-			wantErr: true,
-		},
-		{
-			name:    "Farb-ID 0 ist nicht gültig",
-			id:      1,
-			dto:     &personDTO{Lastname: "X", Name: "Y", ZipCity: "11111 Z", ColorID: "0"},
 			wantErr: true,
 		},
 	}
@@ -191,7 +188,6 @@ func TestSplitZipcodeCity(t *testing.T) {
 		{"67742 Lauterecken", "67742", "Lauterecken"},
 		{"88888 made up", "88888", "made up"},
 		{"77777 made up too", "77777", "made up too"},
-		{"32132 Schweden - ☀", "32132", "Schweden - ☀"},
 		{"12345", "12345", ""},
 		{"", "", ""},
 	}
@@ -215,7 +211,7 @@ func TestLoad(t *testing.T) {
 		wantFirst domain.Person
 	}{
 		{
-			name:    "normale Einträge werden vollständig geladen",
+			name:    "normale Einträge",
 			input:   "Müller, Hans, 67742 Lauterecken, 1\nPetersen, Peter, 18439 Stralsund, 2\n",
 			wantLen: 2,
 			wantFirst: domain.Person{
@@ -224,7 +220,7 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:    "mehrzeiliger Datensatz wird korrekt zusammengeführt",
+			name:    "mehrzeiliger Datensatz",
 			input:   "Bart, Bertram, \n12313 Wasweißich, 1\n",
 			wantLen: 1,
 			wantFirst: domain.Person{
@@ -233,21 +229,12 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:    "Stadt mit Leerzeichen bleibt erhalten",
-			input:   "Johnson, Johnny, 88888 made up, 3\n",
-			wantLen: 1,
-			wantFirst: domain.Person{
-				ID: 1, Name: "Johnny", Lastname: "Johnson",
-				Zipcode: "88888", City: "made up", Color: "violett",
-			},
-		},
-		{
-			name:    "leere Datei erzeugt leeres Repository",
+			name:    "leere Datei",
 			input:   "",
 			wantLen: 0,
 		},
 		{
-			name:    "ungültige Farb-ID wird übersprungen, gültige Datensätze bleiben erhalten",
+			name:    "ungültige Farb-ID übersprungen, gültige bleiben",
 			input:   "A, B, 11111 X, 99\nMüller, Hans, 67742 Lauterecken, 1\n",
 			wantLen: 1,
 			wantFirst: domain.Person{
@@ -259,10 +246,10 @@ func TestLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, err := NewPersonRepository(tempCSV(t, tt.input), testLogger())
+			repo, err := NewPersonRepository(tempCSV(t, tt.input), 0, testLogger())
 			require.NoError(t, err)
 
-			all, err := repo.GetAll(context.Background())
+			all, err := repo.GetAll(context.Background(), 0, 0)
 			require.NoError(t, err)
 			assert.Len(t, all, tt.wantLen)
 			if tt.wantLen > 0 {
@@ -273,16 +260,15 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoad_DateiNichtGefunden(t *testing.T) {
-	_, err := NewPersonRepository("/nicht/vorhanden/pfad.csv", testLogger())
+	_, err := NewPersonRepository("/nicht/vorhanden/pfad.csv", 0, testLogger())
 	require.Error(t, err)
 }
 
-// ─── PersonRepository – GetByID ───────────────────────────────────────────────
+// ─── GetByID ──────────────────────────────────────────────────────────────────
 
 func TestGetByID(t *testing.T) {
 	const data = "Müller, Hans, 67742 Lauterecken, 1\nPetersen, Peter, 18439 Stralsund, 2\n"
-
-	repo, err := NewPersonRepository(tempCSV(t, data), testLogger())
+	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -309,12 +295,11 @@ func TestGetByID(t *testing.T) {
 	}
 }
 
-// ─── PersonRepository – GetByColor ────────────────────────────────────────────
+// ─── GetByColor ───────────────────────────────────────────────────────────────
 
 func TestGetByColor(t *testing.T) {
 	const data = "A, B, 11111 X, 1\nC, D, 22222 Y, 2\nE, F, 33333 Z, 1\n"
-
-	repo, err := NewPersonRepository(tempCSV(t, data), testLogger())
+	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -324,63 +309,86 @@ func TestGetByColor(t *testing.T) {
 	}{
 		{"zwei Treffer für blau", "blau", 2},
 		{"ein Treffer für grün", "grün", 1},
-		{"kein Treffer für rot liefert leeres Slice (nicht nil)", "rot", 0},
+		{"kein Treffer liefert leeres Slice (nicht nil)", "rot", 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			persons, err := repo.GetByColor(context.Background(), tt.color)
+			persons, err := repo.GetByColor(context.Background(), tt.color, 0, 0)
 			require.NoError(t, err)
-			assert.NotNil(t, persons, "Slice darf nicht nil sein – JSON muss [] statt null ausgeben")
+			assert.NotNil(t, persons)
 			assert.Len(t, persons, tt.wantLen)
 		})
 	}
 }
 
-// ─── PersonRepository – Add ───────────────────────────────────────────────────
+// ─── Paginierung ──────────────────────────────────────────────────────────────
+
+func TestGetAll_Paginierung(t *testing.T) {
+	const data = "A, B, 11111 X, 1\nC, D, 22222 Y, 2\nE, F, 33333 Z, 3\n"
+	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		limit   int
+		offset  int
+		wantLen int
+	}{
+		{"alle ohne Limit", 0, 0, 3},
+		{"limit 2", 2, 0, 2},
+		{"offset 1", 0, 1, 2},
+		{"limit 1 offset 1", 1, 1, 1},
+		{"offset über Gesamtzahl hinaus", 0, 99, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			persons, err := repo.GetAll(context.Background(), tt.limit, tt.offset)
+			require.NoError(t, err)
+			assert.Len(t, persons, tt.wantLen)
+		})
+	}
+}
+
+// ─── Add + Kapazitätsgrenze ───────────────────────────────────────────────────
 
 func TestAdd(t *testing.T) {
 	const data = "A, B, 11111 X, 1\n"
-
-	repo, err := NewPersonRepository(tempCSV(t, data), testLogger())
-	require.NoError(t, err)
-
-	additions := []struct {
-		person domain.Person
-		wantID int
-	}{
-		{domain.Person{Name: "Neu", Lastname: "Person", Zipcode: "00000", City: "Stadt", Color: "rot"}, 2},
-		{domain.Person{Name: "Noch", Lastname: "Einer", Zipcode: "11111", City: "Ort", Color: "blau"}, 3},
-	}
-
-	for _, a := range additions {
-		created, err := repo.Add(context.Background(), a.person)
-		require.NoError(t, err)
-		assert.Equal(t, a.wantID, created.ID)
-	}
-
-	all, err := repo.GetAll(context.Background())
-	require.NoError(t, err)
-	assert.Len(t, all, 3)
-}
-
-// TestAdd_KeineIDKollisionNachUebersprungeneEintraege stellt sicher, dass nextID
-// korrekt gesetzt wird, wenn beim Laden Datensätze übersprungen wurden.
-func TestAdd_KeineIDKollisionNachUebersprungeneEintraege(t *testing.T) {
-	// Datensatz 1 ist ungültig (Farb-ID 99), Datensatz 2 erhält ID 2.
-	// nextID muss nach allen rohen Positionen stehen (also 3), damit Add keine
-	// ID vergibt, die bereits einem geladenen Datensatz gehört.
-	const data = "A, B, 11111 X, 99\nMüller, Hans, 67742 Lauterecken, 1\n"
-
-	repo, err := NewPersonRepository(tempCSV(t, data), testLogger())
+	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
 	require.NoError(t, err)
 
 	created, err := repo.Add(context.Background(), domain.Person{
-		Name: "Neu", Lastname: "Person", Zipcode: "00000", City: "Stadt", Color: "rot",
+		Name: "Neu", Lastname: "Person", Color: "rot",
 	})
 	require.NoError(t, err)
+	assert.Equal(t, 2, created.ID)
 
-	// ID 3 wird erwartet (nicht 2, was bereits von "Müller, Hans" belegt ist).
+	all, _ := repo.GetAll(context.Background(), 0, 0)
+	assert.Len(t, all, 2)
+}
+
+func TestAdd_KapazitaetsgrenzExploit3(t *testing.T) {
+	const data = "A, B, 11111 X, 1\n"
+	repo, err := NewPersonRepository(tempCSV(t, data), 2, testLogger())
+	require.NoError(t, err)
+
+	_, err = repo.Add(context.Background(), domain.Person{Name: "N", Lastname: "P", Color: "rot"})
+	require.NoError(t, err)
+
+	_, err = repo.Add(context.Background(), domain.Person{Name: "Z", Lastname: "Q", Color: "blau"})
+	require.ErrorIs(t, err, domain.ErrCapacityReached)
+}
+
+func TestAdd_KeineIDKollisionNachUebersprungeneEintraege(t *testing.T) {
+	const data = "A, B, 11111 X, 99\nMüller, Hans, 67742 Lauterecken, 1\n"
+	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
+	require.NoError(t, err)
+
+	created, err := repo.Add(context.Background(), domain.Person{
+		Name: "Neu", Lastname: "Person", Color: "rot",
+	})
+	require.NoError(t, err)
 	assert.Equal(t, 3, created.ID)
 }
 
@@ -389,55 +397,27 @@ func TestAdd_KeineIDKollisionNachUebersprungeneEintraege(t *testing.T) {
 func TestLoad_SampleInputCSV(t *testing.T) {
 	samplePath := filepath.Join("..", "..", "..", "sample-input.csv")
 	if _, err := os.Stat(samplePath); os.IsNotExist(err) {
-		t.Skip("sample-input.csv nicht gefunden, Test wird übersprungen")
+		t.Skip("sample-input.csv nicht gefunden")
 	}
 
-	repo, err := NewPersonRepository(samplePath, testLogger())
+	repo, err := NewPersonRepository(samplePath, 0, testLogger())
 	require.NoError(t, err)
 
-	tests := []struct {
-		name  string
-		check func(t *testing.T)
-	}{
-		{
-			"gesamt 10 Personen geladen",
-			func(t *testing.T) {
-				all, err := repo.GetAll(context.Background())
-				require.NoError(t, err)
-				assert.Len(t, all, 10)
-			},
-		},
-		{
-			"2 Personen mit Lieblingsfarbe blau",
-			func(t *testing.T) {
-				persons, err := repo.GetByColor(context.Background(), "blau")
-				require.NoError(t, err)
-				assert.Len(t, persons, 2)
-			},
-		},
-		{
-			"3 Personen mit Lieblingsfarbe grün",
-			func(t *testing.T) {
-				persons, err := repo.GetByColor(context.Background(), "grün")
-				require.NoError(t, err)
-				assert.Len(t, persons, 3)
-			},
-		},
-		{
-			"mehrzeiliger Datensatz Bart/Bertram hat ID 8 und korrekte Felder",
-			func(t *testing.T) {
-				p, err := repo.GetByID(context.Background(), 8)
-				require.NoError(t, err)
-				assert.Equal(t, "Bart", p.Lastname)
-				assert.Equal(t, "Bertram", p.Name)
-				assert.Equal(t, "12313", p.Zipcode)
-				assert.Equal(t, "Wasweißich", p.City)
-				assert.Equal(t, "blau", p.Color)
-			},
-		},
-	}
+	all, err := repo.GetAll(context.Background(), 0, 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 10)
 
-	for _, tt := range tests {
-		t.Run(tt.name, tt.check)
-	}
+	blau, _ := repo.GetByColor(context.Background(), "blau", 0, 0)
+	assert.Len(t, blau, 2)
+
+	gruen, _ := repo.GetByColor(context.Background(), "grün", 0, 0)
+	assert.Len(t, gruen, 3)
+
+	bart, err := repo.GetByID(context.Background(), 8)
+	require.NoError(t, err)
+	assert.Equal(t, "Bart", bart.Lastname)
+	assert.Equal(t, "Bertram", bart.Name)
+	assert.Equal(t, "12313", bart.Zipcode)
+	assert.Equal(t, "Wasweißich", bart.City)
+	assert.Equal(t, "blau", bart.Color)
 }

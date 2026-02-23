@@ -22,9 +22,9 @@ func NewPersonService(repo repository.PersonRepository, logger *zap.Logger) *Per
 	return &PersonService{repo: repo, logger: logger}
 }
 
-// GetAll gibt alle Personen zurück.
-func (s *PersonService) GetAll(ctx context.Context) ([]domain.Person, error) {
-	return s.repo.GetAll(ctx)
+// GetAll gibt alle Personen zurück, optional paginiert.
+func (s *PersonService) GetAll(ctx context.Context, limit, offset int) ([]domain.Person, error) {
+	return s.repo.GetAll(ctx, limit, offset)
 }
 
 // GetByID sucht eine einzelne Person anhand ihrer ID.
@@ -35,13 +35,14 @@ func (s *PersonService) GetByID(ctx context.Context, id int) (domain.Person, err
 	return s.repo.GetByID(ctx, id)
 }
 
-// GetByColor gibt alle Personen zurück, deren Lieblingsfarbe dem angegebenen Farbnamen entspricht.
-func (s *PersonService) GetByColor(ctx context.Context, color string) ([]domain.Person, error) {
+// GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück.
+func (s *PersonService) GetByColor(ctx context.Context, color string, limit, offset int) ([]domain.Person, error) {
 	normalized := strings.ToLower(strings.TrimSpace(color))
 	if _, ok := domain.ColorNameID[normalized]; !ok {
-		return nil, fmt.Errorf("unbekannte farbe %q: %w", color, domain.ErrInvalidInput)
+		s.logger.Warn("unbekannte farbe angefragt", zap.String("farbe", color))
+		return nil, fmt.Errorf("ungültige farbe: %w", domain.ErrInvalidInput)
 	}
-	return s.repo.GetByColor(ctx, normalized)
+	return s.repo.GetByColor(ctx, normalized, limit, offset)
 }
 
 // Add validiert und fügt eine neue Person hinzu. Der Farbname wird normalisiert.
@@ -51,7 +52,8 @@ func (s *PersonService) Add(ctx context.Context, person domain.Person) (domain.P
 	}
 	person.Color = strings.ToLower(strings.TrimSpace(person.Color))
 	if _, ok := domain.ColorNameID[person.Color]; !ok {
-		return domain.Person{}, fmt.Errorf("unbekannte farbe %q: %w", person.Color, domain.ErrInvalidInput)
+		s.logger.Warn("ungültige farbe beim erstellen", zap.String("farbe", person.Color))
+		return domain.Person{}, fmt.Errorf("ungültige farbe: %w", domain.ErrInvalidInput)
 	}
 	return s.repo.Add(ctx, person)
 }

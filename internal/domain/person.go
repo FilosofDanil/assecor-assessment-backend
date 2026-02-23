@@ -3,8 +3,9 @@ package domain
 import "errors"
 
 var (
-	ErrNotFound     = errors.New("nicht gefunden")
-	ErrInvalidInput = errors.New("ungültige eingabe")
+	ErrNotFound        = errors.New("nicht gefunden")
+	ErrInvalidInput    = errors.New("ungültige eingabe")
+	ErrCapacityReached = errors.New("kapazitätsgrenze erreicht")
 )
 
 // ColorMap bildet Farben-IDs aus der CSV-Datei auf ihre Farbnamen ab.
@@ -29,7 +30,7 @@ var ColorNameID = map[string]int{
 	"weiß":    7,
 }
 
-// Person repräsentiert eine Person und ihrer Lieblingsfarbe.
+// Person repräsentiert eine Person mit ihrer Lieblingsfarbe.
 type Person struct {
 	ID       int    `json:"id"`
 	Name     string `json:"name"`
