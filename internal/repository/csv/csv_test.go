@@ -120,15 +120,11 @@ func TestNormalizeCSV(t *testing.T) {
 // ─── Bug 2: Akkumulationsschutz ─────────────────────────────────────────────
 
 func TestNormalizeCSV_AkkumulationsschutzBug2(t *testing.T) {
-	// Ein fehlerhafter 3-Feld-Datensatz gefolgt von einem korrekten.
-	// Ohne den Schutz würden die 3 Felder mit den nächsten verschmelzen.
-	// Mit dem Schutz wird bei > maxFieldsAccumulated verworfen.
 	input := "A, B, C\nD, E, F\nG, H, I\nMüller, Hans, 67742 Lauterecken, 1\n"
 	out, err := normalizeCSV([]byte(input), testLogger())
 	require.NoError(t, err)
 
 	rows := parseCSVRows(t, out)
-	// Der letzte gültige 4-Feld-Datensatz muss erhalten bleiben.
 	require.GreaterOrEqual(t, len(rows), 1)
 	last := rows[len(rows)-1]
 	assert.Equal(t, "Müller", last[0])
@@ -249,7 +245,7 @@ func TestLoad(t *testing.T) {
 			repo, err := NewPersonRepository(tempCSV(t, tt.input), 0, testLogger())
 			require.NoError(t, err)
 
-			all, err := repo.GetAll(context.Background(), 0, 0)
+			all, err := repo.GetAll(context.Background())
 			require.NoError(t, err)
 			assert.Len(t, all, tt.wantLen)
 			if tt.wantLen > 0 {
@@ -260,7 +256,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoad_DateiNichtGefunden(t *testing.T) {
-	_, err := NewPersonRepository("/nicht/vorhanden/pfad.csv", 0, testLogger())
+	_, err := NewPersonRepository("/nicht/vorhanden/path.csv", 0, testLogger())
 	require.Error(t, err)
 }
 
@@ -314,38 +310,9 @@ func TestGetByColor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			persons, err := repo.GetByColor(context.Background(), tt.color, 0, 0)
+			persons, err := repo.GetByColor(context.Background(), tt.color)
 			require.NoError(t, err)
 			assert.NotNil(t, persons)
-			assert.Len(t, persons, tt.wantLen)
-		})
-	}
-}
-
-// ─── Paginierung ──────────────────────────────────────────────────────────────
-
-func TestGetAll_Paginierung(t *testing.T) {
-	const data = "A, B, 11111 X, 1\nC, D, 22222 Y, 2\nE, F, 33333 Z, 3\n"
-	repo, err := NewPersonRepository(tempCSV(t, data), 0, testLogger())
-	require.NoError(t, err)
-
-	tests := []struct {
-		name    string
-		limit   int
-		offset  int
-		wantLen int
-	}{
-		{"alle ohne Limit", 0, 0, 3},
-		{"limit 2", 2, 0, 2},
-		{"offset 1", 0, 1, 2},
-		{"limit 1 offset 1", 1, 1, 1},
-		{"offset über Gesamtzahl hinaus", 0, 99, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			persons, err := repo.GetAll(context.Background(), tt.limit, tt.offset)
-			require.NoError(t, err)
 			assert.Len(t, persons, tt.wantLen)
 		})
 	}
@@ -364,7 +331,7 @@ func TestAdd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, created.ID)
 
-	all, _ := repo.GetAll(context.Background(), 0, 0)
+	all, _ := repo.GetAll(context.Background())
 	assert.Len(t, all, 2)
 }
 
@@ -403,14 +370,14 @@ func TestLoad_SampleInputCSV(t *testing.T) {
 	repo, err := NewPersonRepository(samplePath, 0, testLogger())
 	require.NoError(t, err)
 
-	all, err := repo.GetAll(context.Background(), 0, 0)
+	all, err := repo.GetAll(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, all, 10)
 
-	blau, _ := repo.GetByColor(context.Background(), "blau", 0, 0)
+	blau, _ := repo.GetByColor(context.Background(), "blau")
 	assert.Len(t, blau, 2)
 
-	gruen, _ := repo.GetByColor(context.Background(), "grün", 0, 0)
+	gruen, _ := repo.GetByColor(context.Background(), "grün")
 	assert.Len(t, gruen, 3)
 
 	bart, err := repo.GetByID(context.Background(), 8)

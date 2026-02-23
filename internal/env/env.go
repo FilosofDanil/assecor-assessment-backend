@@ -8,7 +8,7 @@ import (
 // Config enthält alle konfigurierbaren Werte der Anwendung, die über Umgebungsvariablen gesetzt werden können.
 type Config struct {
 	ServerAddr  string  // SERVER_ADDR – Adresse des HTTP-Servers (Standard: ":8081")
-	CSVFilePath string  // CSV_FILE_PATH – Pfad zur CSV-Datei (Standard: "sample-input.csv")
+	CSVFilePath string  // CSV_FILE_PATH – Path zur CSV-Datei (Standard: "sample-input.csv")
 	DataSource  string  // DATA_SOURCE – "csv" oder "sqlite" (Standard: "csv")
 	RateLimit   float64 // RATE_LIMIT – Erlaubte Anfragen pro Sekunde (Standard: 100)
 	MaxPersons  int     // MAX_PERSONS – Max. Anzahl Personen im Speicher (Standard: 10000)

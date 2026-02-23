@@ -13,17 +13,14 @@ import (
 	"assecor-assessment-backend/internal/domain"
 )
 
-const (
-	defaultPageSize = 100
-	maxPageSize     = 1000
-	maxRequestBody  = 1 << 10
-)
+// maxRequestBody begrenzt die POST-Body-Größe auf 1 MegaByte
+const maxRequestBody = 1 << 20
 
 // PersonService definiert den Vertrag, den der Handler von der Service-Schicht erwartet.
 type PersonService interface {
-	GetAll(ctx context.Context, limit, offset int) ([]domain.Person, error)
+	GetAll(ctx context.Context) ([]domain.Person, error)
 	GetByID(ctx context.Context, id int) (domain.Person, error)
-	GetByColor(ctx context.Context, color string, limit, offset int) ([]domain.Person, error)
+	GetByColor(ctx context.Context, color string) ([]domain.Person, error)
 	Add(ctx context.Context, person domain.Person) (domain.Person, error)
 }
 
@@ -38,11 +35,9 @@ func NewPersonHandler(svc PersonService, logger *zap.Logger) *PersonHandler {
 	return &PersonHandler{service: svc, logger: logger}
 }
 
-// GetAll gibt alle Personen zurück. Unterstützt ?limit= und ?offset= (Exploit 4).
+// GetAll gibt alle Personen zurück.
 func (h *PersonHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	limit, offset := parsePagination(r)
-
-	persons, err := h.service.GetAll(r.Context(), limit, offset)
+	persons, err := h.service.GetAll(r.Context())
 	if err != nil {
 		h.logger.Error("alle personen abrufen", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorBody{"interner serverfehler"})
@@ -79,9 +74,8 @@ func (h *PersonHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // GetByColor gibt alle Personen mit passender Lieblingsfarbe zurück.
 func (h *PersonHandler) GetByColor(w http.ResponseWriter, r *http.Request) {
 	color := chi.URLParam(r, "color")
-	limit, offset := parsePagination(r)
 
-	persons, err := h.service.GetByColor(r.Context(), color, limit, offset)
+	persons, err := h.service.GetByColor(r.Context(), color)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvalidInput):
@@ -96,6 +90,7 @@ func (h *PersonHandler) GetByColor(w http.ResponseWriter, r *http.Request) {
 }
 
 // Create fügt einen neuen Personendatensatz hinzu.
+// Der Request-Body wird auf maxRequestBody begrenzt (Exploit 1).
 func (h *PersonHandler) Create(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
@@ -119,28 +114,6 @@ func (h *PersonHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
-}
-
-// parsePagination liest limit/offset aus den URL-Query-Parametern.
-func parsePagination(r *http.Request) (limit, offset int) {
-	limit = defaultPageSize
-	offset = 0
-
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
-
-	if limit > maxPageSize {
-		limit = maxPageSize
-	}
-	return
 }
 
 // errorBody ist die einheitliche Fehlerantwort-Struktur.
