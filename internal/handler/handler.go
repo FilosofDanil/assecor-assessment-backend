@@ -16,7 +16,7 @@ import (
 const (
 	defaultPageSize = 100
 	maxPageSize     = 1000
-	maxRequestBody  = 1 << 20
+	maxRequestBody  = 1 << 10
 )
 
 // PersonService definiert den Vertrag, den der Handler von der Service-Schicht erwartet.
