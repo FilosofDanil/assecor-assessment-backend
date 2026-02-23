@@ -4,33 +4,24 @@ import (
 	"net/http"
 	"time"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 )
 
-// statusWriter kapselt http. ResponseWriter, um den gesetzten HTTP-Statuscode nach dem Schreiben der Antwort abzufragen.
-type statusWriter struct {
-	http.ResponseWriter
-	code int
-}
-
-func (w *statusWriter) WriteHeader(code int) {
-	w.code = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-// Logging gibt eine Middleware zurück, die jede Anfrage mit Methode, Pfad, Statuscode und Dauer strukturiert protokolliert.
+// Logging gibt eine Middleware zurück, die jede Anfrage mit Methode, Pfad, Statuscode, Dauer und Request-ID
 func Logging(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 
-			next.ServeHTTP(sw, r)
+			next.ServeHTTP(ww, r)
 
 			logger.Info("anfrage",
+				zap.String("request_id", chimw.GetReqID(r.Context())),
 				zap.String("methode", r.Method),
 				zap.String("pfad", r.URL.Path),
-				zap.Int("status", sw.code),
+				zap.Int("status", ww.Status()),
 				zap.Duration("dauer", time.Since(start)),
 			)
 		})

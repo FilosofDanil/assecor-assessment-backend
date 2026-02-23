@@ -22,9 +22,17 @@ func newMockRepo(persons []domain.Person) *mockRepo {
 	return &mockRepo{persons: persons, nextID: len(persons) + 1}
 }
 
-func (m *mockRepo) GetAll(_ context.Context) ([]domain.Person, error) {
+func (m *mockRepo) GetAll(_ context.Context, limit, offset int) ([]domain.Person, error) {
 	out := make([]domain.Person, len(m.persons))
 	copy(out, m.persons)
+	if offset > 0 && offset < len(out) {
+		out = out[offset:]
+	} else if offset >= len(out) {
+		return make([]domain.Person, 0), nil
+	}
+	if limit > 0 && limit < len(out) {
+		out = out[:limit]
+	}
 	return out, nil
 }
 
@@ -37,14 +45,17 @@ func (m *mockRepo) GetByID(_ context.Context, id int) (domain.Person, error) {
 	return domain.Person{}, fmt.Errorf("person mit id %d: %w", id, domain.ErrNotFound)
 }
 
-func (m *mockRepo) GetByColor(_ context.Context, color string) ([]domain.Person, error) {
-	out := make([]domain.Person, 0)
+func (m *mockRepo) GetByColor(_ context.Context, color string, limit, offset int) ([]domain.Person, error) {
+	var matched []domain.Person
 	for _, p := range m.persons {
 		if p.Color == color {
-			out = append(out, p)
+			matched = append(matched, p)
 		}
 	}
-	return out, nil
+	if matched == nil {
+		matched = make([]domain.Person, 0)
+	}
+	return matched, nil
 }
 
 func (m *mockRepo) Add(_ context.Context, person domain.Person) (domain.Person, error) {
@@ -68,7 +79,7 @@ func neuerTestService(repo *mockRepo) *PersonService {
 
 func TestGetAll(t *testing.T) {
 	svc := neuerTestService(seedRepo())
-	persons, err := svc.GetAll(context.Background())
+	persons, err := svc.GetAll(context.Background(), 0, 0)
 	require.NoError(t, err)
 	assert.Len(t, persons, 2)
 }
@@ -96,28 +107,35 @@ func TestGetByID_UngueltigeID(t *testing.T) {
 
 func TestGetByColor_Gueltig(t *testing.T) {
 	svc := neuerTestService(seedRepo())
-	persons, err := svc.GetByColor(context.Background(), "blau")
+	persons, err := svc.GetByColor(context.Background(), "blau", 0, 0)
 	require.NoError(t, err)
 	assert.Len(t, persons, 1)
 }
 
 func TestGetByColor_Grossschreibung(t *testing.T) {
 	svc := neuerTestService(seedRepo())
-	// "Blau" und "BLAU" müssen auf "blau" normalisiert werden.
-	persons, err := svc.GetByColor(context.Background(), "Blau")
+	persons, err := svc.GetByColor(context.Background(), "Blau", 0, 0)
 	require.NoError(t, err)
 	assert.Len(t, persons, 1)
 
-	persons2, err := svc.GetByColor(context.Background(), "BLAU")
+	persons2, err := svc.GetByColor(context.Background(), "BLAU", 0, 0)
 	require.NoError(t, err)
 	assert.Len(t, persons2, 1)
 }
 
 func TestGetByColor_UnbekannteFarbe(t *testing.T) {
 	svc := neuerTestService(seedRepo())
-	_, err := svc.GetByColor(context.Background(), "pink")
+	_, err := svc.GetByColor(context.Background(), "pink", 0, 0)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrInvalidInput)
+}
+
+func TestGetByColor_GenericErrorOhneUserInput(t *testing.T) {
+	svc := neuerTestService(seedRepo())
+	_, err := svc.GetByColor(context.Background(), "xss<script>", 0, 0)
+	require.Error(t, err)
+	// Exploit 5: Die Fehlermeldung darf die Benutzereingabe nicht enthalten.
+	assert.NotContains(t, err.Error(), "xss<script>")
 }
 
 func TestAdd_Gueltig(t *testing.T) {

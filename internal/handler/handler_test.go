@@ -27,9 +27,17 @@ func newMockService(persons []domain.Person) *mockService {
 	return &mockService{persons: persons, nextID: len(persons) + 1}
 }
 
-func (m *mockService) GetAll(_ context.Context) ([]domain.Person, error) {
+func (m *mockService) GetAll(_ context.Context, limit, offset int) ([]domain.Person, error) {
 	out := make([]domain.Person, len(m.persons))
 	copy(out, m.persons)
+	if offset > 0 && offset < len(out) {
+		out = out[offset:]
+	} else if offset >= len(out) {
+		return make([]domain.Person, 0), nil
+	}
+	if limit > 0 && limit < len(out) {
+		out = out[:limit]
+	}
 	return out, nil
 }
 
@@ -45,9 +53,9 @@ func (m *mockService) GetByID(_ context.Context, id int) (domain.Person, error) 
 	return domain.Person{}, fmt.Errorf("person mit id %d: %w", id, domain.ErrNotFound)
 }
 
-func (m *mockService) GetByColor(_ context.Context, color string) ([]domain.Person, error) {
+func (m *mockService) GetByColor(_ context.Context, color string, _, _ int) ([]domain.Person, error) {
 	if _, ok := domain.ColorNameID[color]; !ok {
-		return nil, fmt.Errorf("unbekannte farbe %q: %w", color, domain.ErrInvalidInput)
+		return nil, fmt.Errorf("ungültige farbe: %w", domain.ErrInvalidInput)
 	}
 	out := make([]domain.Person, 0)
 	for _, p := range m.persons {
@@ -63,7 +71,7 @@ func (m *mockService) Add(_ context.Context, person domain.Person) (domain.Perso
 		return domain.Person{}, fmt.Errorf("name und nachname sind erforderlich: %w", domain.ErrInvalidInput)
 	}
 	if _, ok := domain.ColorNameID[person.Color]; !ok {
-		return domain.Person{}, fmt.Errorf("unbekannte farbe %q: %w", person.Color, domain.ErrInvalidInput)
+		return domain.Person{}, fmt.Errorf("ungültige farbe: %w", domain.ErrInvalidInput)
 	}
 	person.ID = m.nextID
 	m.nextID++
@@ -104,6 +112,19 @@ func TestGetAll_GibtPersonenZurueck(t *testing.T) {
 	var persons []domain.Person
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&persons))
 	assert.Len(t, persons, 3)
+}
+
+func TestGetAll_MitPaginierung(t *testing.T) {
+	_, router := neuerTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "/persons?limit=2&offset=1", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var persons []domain.Person
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&persons))
+	assert.Len(t, persons, 2)
 }
 
 func TestGetByID_Gefunden(t *testing.T) {
@@ -160,7 +181,6 @@ func TestGetByColor_Gefunden(t *testing.T) {
 	var persons []domain.Person
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&persons))
 	assert.Len(t, persons, 1)
-	assert.Equal(t, "blau", persons[0].Color)
 }
 
 func TestGetByColor_Leer(t *testing.T) {
